@@ -10,7 +10,7 @@ import sklearn as sk
 import sklearn.linear_model
 
 from navicat_volcanic.exceptions import MissingDataError
-from navicat_volcanic.helpers import bround
+from navicat_volcanic.helpers import bround, outpath
 from navicat_volcanic.tof import calc_es, calc_s_es, calc_tof, calc_atof
 
 
@@ -160,18 +160,19 @@ def plot_2d_lsfer(
         plt.ylim(ymin, ymax)
         plt.yticks(np.arange(ymin, ymax + 0.1, ybase))
         plt.xticks(np.arange(xmin, xmax + 0.1, xbase))
-        plt.savefig(f"{tags[j]}.png")
+        plt.savefig(outpath(f"{tags[j]}.png"))
+        plt.close(fig)
+        csvname = outpath(f"{tags[j]}.csv")
         if verb > 0:
-            csvname = f"{tags[j]}.csv"
             print(f"Saving volcano data to file {csvname}")
-            zdata = list(zip(xint, yint, ci))
-            np.savetxt(
-                csvname,
-                zdata,
-                fmt="%.4e",
-                delimiter=",",
-                header=f"Descriptor, {tags[j]}, 95%CI",
-            )
+        zdata = list(zip(xint, yint, ci))
+        np.savetxt(
+            csvname,
+            zdata,
+            fmt="%.4e",
+            delimiter=",",
+            header=f"Descriptor, {tags[j]}, 95%CI",
+        )
     return np.hstack((d_refill, d2))
 
 
@@ -325,6 +326,7 @@ def plot_2d(
     plt.ylim(ymin, ymax)
     plt.yticks(np.arange(ymin, ymax + 0.1, ybase))
     plt.savefig(filename)
+    plt.close(fig)
 
 
 def plot_2d_es_volcano(
@@ -412,34 +414,33 @@ def plot_2d_es_volcano(
         dgr_s = dgr[i]
         px[i] = X[i].reshape(-1)
         py[i] = calc_es(profile, dgr_s, esp=True)[0]
-        if verb > 1:
-            pointsname = f"points_es_volcano_{tag}.csv"
-            zdata = list(zip(px, py))
-            np.savetxt(
-                pointsname,
-                zdata,
-                fmt="%.4e",
-                delimiter=",",
-                header="Descriptor, -\d_Ges",
-            )
         if verb > 2:
             print(
                 f"Profile {profile} with reaction energy {dgr_s} corresponds with ES of {py[i]}"
             )
     xlabel = f"{tag} [kcal/mol]"
     ylabel = r"-δ$E$ [kcal/mol]"
-    filename = f"es_volcano_{tag}.png"
+    pointsname = outpath(f"points_es_volcano_{tag}.csv")
+    zdata = list(zip(px, py))
+    np.savetxt(
+        pointsname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_es",
+    )
+    filename = outpath(f"es_volcano_{tag}.png")
+    csvname = outpath(f"es_volcano_{tag}.csv")
     if verb > 0:
-        csvname = f"es_volcano_{tag}.csv"
         print(f"Saving volcano data to file {csvname}")
-        zdata = list(zip(xint, ymin, ci))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor, -\d_Ges, 95%CI",
-        )
+    zdata = list(zip(xint, ymin, ci))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_es, 95%CI",
+    )
     plot_2d(
         xint,
         ymin,
@@ -547,30 +548,29 @@ def plot_2d_k_volcano(
         dgr_s = dgr[i]
         px[i] = X[i].reshape(-1)
         py[i] = calc_s_es(profile, dgr_s, esp=True)[0]
-        if verb > 1:
-            pointsname = f"points_k_volcano_{tag}.csv"
-            zdata = list(zip(px, py))
-            np.savetxt(
-                pointsname,
-                zdata,
-                fmt="%.4e",
-                delimiter=",",
-                header="Descriptor, -\d_Gkds",
-            )
     xlabel = f"{tag} [kcal/mol]"
     ylabel = "-ΔG(kds) [kcal/mol]"
-    filename = f"k_volcano_{tag}.png"
+    pointsname = outpath(f"points_k_volcano_{tag}.csv")
+    zdata = list(zip(px, py))
+    np.savetxt(
+        pointsname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_kds",
+    )
+    filename = outpath(f"k_volcano_{tag}.png")
+    csvname = outpath(f"k_volcano_{tag}.csv")
     if verb > 0:
-        csvname = f"k_volcano_{tag}.csv"
         print(f"Saving volcano data to file {csvname}")
-        zdata = list(zip(xint, ymin, ci))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor, -\d_Gkds, 95%CI",
-        )
+    zdata = list(zip(xint, ymin, ci))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_kds, 95%CI",
+    )
     plot_2d(
         xint,
         ymin,
@@ -678,30 +678,29 @@ def plot_2d_t_volcano(
         dgr_s = dgr[i]
         px[i] = X[i].reshape(-1)
         py[i] = calc_s_es(profile, dgr_s, esp=True)[0]
-        if verb > 1:
-            pointsname = f"points_t_volcano_{tag}.csv"
-            zdata = list(zip(px, py))
-            np.savetxt(
-                pointsname,
-                zdata,
-                fmt="%.4e",
-                delimiter=",",
-                header="Descriptor, -\d_Gpds",
-            )
     xlabel = f"{tag} [kcal/mol]"
     ylabel = "-ΔG(pds) [kcal/mol]"
-    filename = f"t_volcano_{tag}.png"
+    pointsname = outpath(f"points_t_volcano_{tag}.csv")
+    zdata = list(zip(px, py))
+    np.savetxt(
+        pointsname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_pds",
+    )
+    filename = outpath(f"t_volcano_{tag}.png")
+    csvname = outpath(f"t_volcano_{tag}.csv")
     if verb > 0:
-        csvname = f"t_volcano_{tag}.csv"
         print(f"Saving volcano data to file {csvname}")
-        zdata = list(zip(xint, ymin, ci))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor, -\d_Gpds, 95%CI",
-        )
+    zdata = list(zip(xint, ymin, ci))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, -dG_pds, 95%CI",
+    )
     plot_2d(
         xint,
         ymin,
@@ -828,30 +827,29 @@ def plot_2d_tof_volcano(
             print(
                 f"Profile {profile} with reaction energy {dgr_s} corresponds with log10(TOF) of {np.round(ltof,2)}"
             )
-        if verb > 1:
-            pointsname = f"points_tof_volcano_{tag}.csv"
-            zdata = list(zip(px, py))
-            np.savetxt(
-                pointsname,
-                zdata,
-                fmt="%.4e",
-                delimiter=",",
-                header="Descriptor, log10(TOF)",
-            )
     xlabel = f"{tag} [kcal/mol]"
     ylabel = "log(TOF) [1/s]"
-    filename = f"tof_volcano_{tag}.png"
+    pointsname = outpath(f"points_tof_volcano_{tag}.csv")
+    zdata = list(zip(px, py))
+    np.savetxt(
+        pointsname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, log10(TOF)",
+    )
+    filename = outpath(f"tof_volcano_{tag}.png")
+    csvname = outpath(f"tof_volcano_{tag}.csv")
     if verb > 0:
-        csvname = f"tof_volcano_{tag}.csv"
         print(f"Saving TOF volcano data to file {csvname}")
-        zdata = list(zip(xint, ytof, ci))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor, log10(TOF), 95%CI",
-        )
+    zdata = list(zip(xint, ytof, ci))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor, log10(TOF), 95%CI",
+    )
     plot_2d(
         xint,
         ytof,

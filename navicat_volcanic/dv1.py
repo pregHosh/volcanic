@@ -9,14 +9,14 @@ from navicat_volcanic.exceptions import InputError
 rng = np.random.default_rng()
 
 
-def call_imputer(a, b, imputer_strat="iterative"):
+def call_imputer(a, b, imputer_strat="iterative", seed=None):
     if imputer_strat == "iterative":
         try:
             from sklearn.experimental import enable_iterative_imputer
             from sklearn.impute import IterativeImputer
         except ModuleNotFoundError as err:
             return a
-        imputer = IterativeImputer(max_iter=25)
+        imputer = IterativeImputer(max_iter=25, random_state=seed)
         newa = imputer.fit(b).transform(a.reshape(1, -1)).flatten()
         return newa
     elif imputer_strat == "simple":
@@ -41,14 +41,15 @@ def call_imputer(a, b, imputer_strat="iterative"):
         return a
 
 
-def curate_d(d, regress, cb, ms, tags, imputer_strat="none", nstds=5, verb=0):
+def curate_d(d, regress, cb, ms, tags, imputer_strat="none", nstds=5, verb=0, seed=None):
     assert isinstance(d, np.ndarray)
     dit = d[:, regress]
     tagsit = tags[:]
     curated_d = np.zeros_like(dit)
     for i in range(dit.shape[1]):
-        mean = dit[:, i].mean()
-        std = dit[:, i].std()
+        # NaN-aware: a column with a missing value must still be filtered
+        mean = np.nanmean(dit[:, i]) if not np.isnan(dit[:, i]).all() else np.nan
+        std = np.nanstd(dit[:, i]) if not np.isnan(dit[:, i]).all() else np.nan
         moe = nstds * std
         if verb > 2:
             print(f"We assume a margin of error of {moe}.")
@@ -76,7 +77,7 @@ def curate_d(d, regress, cb, ms, tags, imputer_strat="none", nstds=5, verb=0):
             if verb > 1:
                 print(f"Using the imputer strategy, converted\n {tofix}.")
             toref = dit[np.arange(dit.shape[0]) != j, :]
-            dit[j, :] = call_imputer(tofix, toref, imputer_strat)
+            dit[j, :] = call_imputer(tofix, toref, imputer_strat, seed=seed)
             if verb > 1:
                 print(f"to\n {dit[j,:]}.")
         curated_d[j, :] = dit[j, :]
@@ -96,7 +97,13 @@ def curate_d(d, regress, cb, ms, tags, imputer_strat="none", nstds=5, verb=0):
     return d, curated_cb, curated_ms
 
 
-def find_1_dv(d, tags, coeff, regress, verb=0):
+def score_1_dv(d, tags, coeff, regress, verb=0):
+    """Score every column but the first (the reference state) as a single descriptor.
+
+    Returns (maes, r2s, maps), one entry per column of tags[1:]: the mean absolute error, mean r2 and mean absolute
+    percentage error of the linear fits of the regressed columns on that column, each rounded to 4 decimals.
+    find_1_dv and helpers.choose_1_dv both select from these scores.
+    """
     assert isinstance(d, np.ndarray)
     assert len(tags) == len(coeff) == len(regress)
     valid_d = np.copy(regress)
@@ -151,6 +158,13 @@ def find_1_dv(d, tags, coeff, regress, verb=0):
             print(
                 f"\nWith {tags[i]} as descriptor,\n the mean r2 is : {np.round(r2s[i],2)},\n the mean MAE is :  {np.round(maes[i],2)}\n the std MAPE is : {np.round(maps[i],2)}\n"
             )
+    return maes, r2s, maps
+
+
+def find_1_dv(d, tags, coeff, regress, verb=0):
+    maes, r2s, maps = score_1_dv(d, tags, coeff, regress, verb)
+    tags = tags[1:]
+    coeff = coeff[1:]
     criteria = []
     criteria.append(np.squeeze(np.where(r2s == np.max(r2s[~coeff]))))
     criteria.append(np.squeeze(np.where(maes == np.min(maes[~coeff]))))

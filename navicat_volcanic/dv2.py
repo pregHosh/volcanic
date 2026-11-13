@@ -37,8 +37,15 @@ def dv_collinear(X, verb=0):
         return False
 
 
-@sup
-def find_2_dv(d, tags, coeff, regress, verb=0):
+def _score_2_dv(d, tags, coeff, regress, verb=0):
+    """Score every pair of columns but the first (the reference state) as a pair of descriptors.
+
+    Returns (pairs, pcoeff, maes, r2s, maps): pairs are index pairs into tags[1:] (itertools.combinations order),
+    pcoeff marks pairs holding a TS column, and maes, r2s and maps are the mean absolute error, mean r2 and spread of
+    the absolute percentage error of the bilinear fits of the regressed columns, rounded to 4 decimals. As find_2_dv
+    always did, regress[-1] is set to False in place when the last column is constant. find_2_dv and
+    helpers.choose_2_dv both select from these scores.
+    """
     assert isinstance(d, np.ndarray)
     assert len(tags) == len(coeff)
     try:
@@ -116,6 +123,19 @@ def find_2_dv(d, tags, coeff, regress, verb=0):
             print(
                 f"\nWith a combination of {tags[i]} and {tags[j]} as descriptor,\n the mean r2 is : {np.round(r2s[idx],2)},\n the mean MAE is :  {np.round(maes[idx],2)}\n the std MAPE is : {np.round(maps[idx],2)}\n"
             )
+    return lpnsteps, pcoeff, maes, r2s, maps
+
+
+# One suppress_warnings instance cannot be entered twice: find_2_dv (decorated) calls the undecorated scorer.
+score_2_dv = sup(_score_2_dv)
+
+
+@sup
+def find_2_dv(d, tags, coeff, regress, verb=0):
+    lpnsteps, pcoeff, maes, r2s, maps = _score_2_dv(d, tags, coeff, regress, verb)
+    ptags = np.empty(len(lpnsteps), dtype=object)
+    for i, pair in enumerate(lpnsteps):
+        ptags[i] = tags[1:][pair[0]] + " and " + tags[1:][pair[1]]
     criteria = []
     criteria.append(
         np.squeeze(np.where(r2s == np.nanmax(r2s[~np.ma.make_mask(pcoeff)])))

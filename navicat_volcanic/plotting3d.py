@@ -14,7 +14,7 @@ import sklearn as sk
 import sklearn.linear_model
 
 from navicat_volcanic.exceptions import MissingDataError
-from navicat_volcanic.helpers import bround
+from navicat_volcanic.helpers import bround, outpath
 from navicat_volcanic.tof import calc_es, calc_s_es, calc_tof
 
 
@@ -191,7 +191,8 @@ def plot_3d_lsfer(
         plt.xlabel(f"Function of {tag1} and {tag2}")
         plt.ylabel(f"{tags[j]} [kcal/mol]")
         plt.xlim(xmin, xmax)
-        plt.savefig(f"{tags[j]}.png")
+        plt.savefig(outpath(f"{tags[j]}.png"))
+        plt.close(fig)
     return np.hstack((d_refill, d2))
 
 
@@ -273,23 +274,23 @@ def plot_3d_t_volcano(
     x1label = f"{tag1} [kcal/mol]"
     x2label = f"{tag2} [kcal/mol]"
     ylabel = "-ΔG(pds) [kcal/mol]"
-    filename = f"t_volcano_{tag1}_{tag2}.png"
+    filename = outpath(f"t_volcano_{tag1}_{tag2}.png")
+    csvname = outpath(f"t_volcano_{tag1}_{tag2}.csv")
     if verb > 0:
-        csvname = f"t_volcano_{tag1}_{tag2}.csv"
         print(f"Saving volcano data to file {csvname}")
-        x = np.zeros_like(grid.reshape(-1))
-        y = np.zeros_like(grid.reshape(-1))
-        for i, xy in enumerate(itertools.product(xint, yint)):
-            x[i] = xy[0]
-            y[i] = xy[1]
-        zdata = list(zip(x, y, grid.reshape(-1)))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor 1, Descriptor 2, -\D_pds",
-        )
+    x = np.zeros_like(grid.reshape(-1))
+    y = np.zeros_like(grid.reshape(-1))
+    for i, xy in enumerate(itertools.product(xint, yint)):
+        x[i] = xy[0]
+        y[i] = xy[1]
+    zdata = list(zip(x, y, grid.reshape(-1)))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor 1, Descriptor 2, -dG_pds",
+    )
     if plotmode == 2:
         plot_3d_contour(
             xint,
@@ -416,23 +417,23 @@ def plot_3d_k_volcano(
     x1label = f"{tag1} [kcal/mol]"
     x2label = f"{tag2} [kcal/mol]"
     ylabel = "-ΔG(kds) [kcal/mol]"
-    filename = f"k_volcano_{tag1}_{tag2}.png"
+    filename = outpath(f"k_volcano_{tag1}_{tag2}.png")
+    csvname = outpath(f"k_volcano_{tag1}_{tag2}.csv")
     if verb > 0:
-        csvname = f"k_volcano_{tag1}_{tag2}.csv"
         print(f"Saving volcano data to file {csvname}")
-        x = np.zeros_like(grid.reshape(-1))
-        y = np.zeros_like(grid.reshape(-1))
-        for i, xy in enumerate(itertools.product(xint, yint)):
-            x[i] = xy[0]
-            y[i] = xy[1]
-        zdata = list(zip(x, y, grid.reshape(-1)))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor 1, Descriptor 2, -\D_kds",
-        )
+    x = np.zeros_like(grid.reshape(-1))
+    y = np.zeros_like(grid.reshape(-1))
+    for i, xy in enumerate(itertools.product(xint, yint)):
+        x[i] = xy[0]
+        y[i] = xy[1]
+    zdata = list(zip(x, y, grid.reshape(-1)))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor 1, Descriptor 2, -dG_kds",
+    )
     if plotmode == 2:
         plot_3d_contour(
             xint,
@@ -587,37 +588,37 @@ def plot_3d_es_volcano(
     x1label = f"{tag1} [kcal/mol]"
     x2label = f"{tag2} [kcal/mol]"
     ylabel = r"-δ$E$ [kcal/mol]"
-    filename = f"es_volcano_{tag1}_{tag2}.png"
+    filename = outpath(f"es_volcano_{tag1}_{tag2}.png")
     if plot_regions:
-        filename_regions = f"regions_es_volcano_{tag1}_{tag2}.png"
+        filename_regions = outpath(f"regions_es_volcano_{tag1}_{tag2}.png")
+    csvname = outpath(f"es_volcano_{tag1}_{tag2}.csv")
+    if plot_regions:
+        csvname_regions = outpath(f"regions_es_volcano_{tag1}_{tag2}.csv")
     if verb > 0:
-        csvname = f"es_volcano_{tag1}_{tag2}.csv"
-        if plot_regions:
-            csvname_regions = f"regions_es_volcano_{tag1}_{tag2}.csv"
         print(f"Saving volcano data to file {csvname}")
-        x = np.zeros_like(grid.reshape(-1))
-        y = np.zeros_like(grid.reshape(-1))
-        for i, xy in enumerate(itertools.product(xint, yint)):
-            x[i] = xy[0]
-            y[i] = xy[1]
-        zdata = list(zip(x, y, grid.reshape(-1)))
-        if plot_regions:
-            zdata_regions = list(zip(x, y, ridgrid.reshape(-1)))
+    x = np.zeros_like(grid.reshape(-1))
+    y = np.zeros_like(grid.reshape(-1))
+    for i, xy in enumerate(itertools.product(xint, yint)):
+        x[i] = xy[0]
+        y[i] = xy[1]
+    zdata = list(zip(x, y, grid.reshape(-1)))
+    if plot_regions:
+        zdata_regions = list(zip(x, y, ridgrid.reshape(-1)))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor 1, Descriptor 2, -dG_es",
+    )
+    if plot_regions:
         np.savetxt(
-            csvname,
-            zdata,
+            csvname_regions,
+            zdata_regions,
             fmt="%.4e",
             delimiter=",",
-            header="Descriptor 1, Descriptor 2, -\d_Ges",
+            header="Descriptor 1, Descriptor 2, RegionID",
         )
-        if plot_regions:
-            np.savetxt(
-                csvname_regions,
-                zdata_regions,
-                fmt="%.4e",
-                delimiter=",",
-                header="Descriptor 1, Descriptor 2, RegionID",
-            )
     if plot_regions:
         ymin_region = 0
         ymax_region = len(unique)
@@ -765,23 +766,23 @@ def plot_3d_tof_volcano(
     x1label = f"{tag1} [kcal/mol]"
     x2label = f"{tag2} [kcal/mol]"
     ylabel = "log(TOF) [1/s]"
-    filename = f"tof_volcano_{tag1}_{tag2}.png"
+    filename = outpath(f"tof_volcano_{tag1}_{tag2}.png")
+    csvname = outpath(f"tof_volcano_{tag1}_{tag2}.csv")
     if verb > 0:
-        csvname = f"tof_volcano_{tag1}_{tag2}.csv"
         print(f"Saving TOF volcano data to file {csvname}")
-        x = np.zeros_like(grid.reshape(-1))
-        y = np.zeros_like(grid.reshape(-1))
-        for i, xy in enumerate(itertools.product(xint, yint)):
-            x[i] = xy[0]
-            y[i] = xy[1]
-        zdata = list(zip(x, y, grid.reshape(-1)))
-        np.savetxt(
-            csvname,
-            zdata,
-            fmt="%.4e",
-            delimiter=",",
-            header="Descriptor 1, Descriptor 2, log10(TOF)",
-        )
+    x = np.zeros_like(grid.reshape(-1))
+    y = np.zeros_like(grid.reshape(-1))
+    for i, xy in enumerate(itertools.product(xint, yint)):
+        x[i] = xy[0]
+        y[i] = xy[1]
+    zdata = list(zip(x, y, grid.reshape(-1)))
+    np.savetxt(
+        csvname,
+        zdata,
+        fmt="%.4e",
+        delimiter=",",
+        header="Descriptor 1, Descriptor 2, log10(TOF)",
+    )
     if plotmode == 2:
         plot_3d_contour(
             xint,
@@ -870,7 +871,7 @@ def plot_3d_contour(
         frameon=False, figsize=[4.2, 3], dpi=300, constrained_layout=True
     )
     grid = np.clip(grid, ymin, ymax)
-    norm = cm.colors.Normalize(vmax=ymax, vmin=ymin)
+    norm = matplotlib.colors.Normalize(vmax=ymax, vmin=ymin)
     ax = beautify_ax(ax)
     levels = np.arange(ymin - 5, ymax + 5, 2.5)
     cset = ax.contourf(
@@ -879,7 +880,7 @@ def plot_3d_contour(
         grid,
         levels=levels,
         norm=norm,
-        cmap=cm.get_cmap("jet", len(levels)),
+        cmap=matplotlib.colormaps["jet"].resampled(len(levels)),
     )
 
     # Labels and key
@@ -904,6 +905,7 @@ def plot_3d_contour(
             edgecolors="black",
         )
     plt.savefig(filename)
+    plt.close(fig)
 
 
 def plot_3d_contour_regions(
@@ -940,7 +942,7 @@ def plot_3d_contour_regions(
         yint,
         grid,
         levels=levels,
-        cmap=cm.get_cmap("Dark2", nunique + 1),
+        cmap=matplotlib.colormaps["Dark2"].resampled(nunique + 1),
     )
 
     # Labels and key
@@ -978,6 +980,7 @@ def plot_3d_contour_regions(
             edgecolors="black",
         )
     plt.savefig(filename)
+    plt.close(fig)
 
 
 def plot_3d_scatter(
@@ -1006,7 +1009,7 @@ def plot_3d_scatter(
         frameon=False, figsize=[4.2, 3], dpi=300, constrained_layout=True
     )
     grid = np.clip(grid, ymin, ymax)
-    norm = cm.colors.Normalize(vmax=ymax, vmin=ymin)
+    norm = matplotlib.colors.Normalize(vmax=ymax, vmin=ymin)
     ax = beautify_ax(ax)
     cset = ax.imshow(
         grid,
@@ -1038,3 +1041,4 @@ def plot_3d_scatter(
                 edgecolors="black",
             )
     plt.savefig(filename)
+    plt.close(fig)

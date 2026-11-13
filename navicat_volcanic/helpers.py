@@ -2,13 +2,72 @@
 
 import argparse
 import itertools
+import math
 import os
+import re
+import sys
 from itertools import cycle
 
 import numpy as np
 import pandas as pd
 
-from navicat_volcanic.exceptions import InputError
+from navicat_volcanic.exceptions import ChoiceError, DescriptorChoiceError, InputError
+
+RUN_MODES = {0: "lsfer", 1: "thermodynamic", 2: "kinetic", 3: "energy_span", 4: "tof", 5: "all"}
+RUN_MODE_FLAGS = "-lsfer, -thermo, -kinetic, -es, -tof or -all (or -r 0..5)"
+
+# Where volcanic writes its files. set_outdir() points it at a directory; outpath() turns a raw name (built from
+# column headers) into a safe file name there and records it, so a caller can find what a run wrote.
+_OUTPUT = {"dir": None, "by_raw": {}, "by_safe": {}}
+_UNSAFE = set("[]'\"\\/:*?<>|`$!&;{}")
+
+
+def safe_name(name):
+    """A file name from a raw name built from column headers: list-literal brackets and quotes, path, shell and
+    wildcard characters, whitespace and control characters become '_', runs of '_' collapse, and the name never
+    starts with '-' or '.'. The extension is kept."""
+    stem, ext = os.path.splitext(str(name))
+    if not re.fullmatch(r"\.[A-Za-z0-9]{1,6}", ext or "."):
+        stem, ext = str(name), ""
+    out = "".join("_" if (ch in _UNSAFE or ch.isspace() or ord(ch) < 32) else ch for ch in stem)
+    out = re.sub(r"_+", "_", out).strip("_").lstrip("-.").strip("_")
+    return (out or "output") + ext
+
+
+def set_outdir(path=None):
+    """Write every later volcanic output into ``path`` (created when missing); None writes into the working
+    directory, as volcanic always did. Also forgets the names recorded by outpath()."""
+    if path is not None:
+        os.makedirs(path, exist_ok=True)
+    _OUTPUT.update(dir=None if path is None else str(path), by_raw={}, by_safe={})
+
+
+def outpath(name):
+    """The path to write an output called ``name`` to: safe_name(name) inside the output directory. Two different
+    raw names that clean to the same name get numbered suffixes instead of overwriting each other."""
+    raw = str(name)
+    if raw in _OUTPUT["by_raw"]:
+        safe = _OUTPUT["by_raw"][raw]
+    else:
+        safe = safe_name(raw)
+        stem, ext = os.path.splitext(safe)
+        k = 1
+        while safe in _OUTPUT["by_safe"] and _OUTPUT["by_safe"][safe] != raw:
+            k += 1
+            safe = f"{stem}_{k}{ext}"
+        _OUTPUT["by_raw"][raw] = safe
+        _OUTPUT["by_safe"][safe] = raw
+    return os.path.join(_OUTPUT["dir"], safe) if _OUTPUT["dir"] else safe
+
+
+def outname(name):
+    """The file name (relative to the output directory) outpath() gave the raw name ``name``, or None."""
+    return _OUTPUT["by_raw"].get(str(name))
+
+
+def output_files():
+    """The file names (relative to the output directory) given out by outpath() since the last set_outdir()."""
+    return sorted(_OUTPUT["by_safe"])
 
 
 def yesno(question):
@@ -50,7 +109,197 @@ def group_data_points(bc, ec, names):
     return cb, ms
 
 
-def user_choose_1_dv(dvs, r2s, tags):
+def _headless():
+    """True when nobody can answer a prompt (stdin missing or not a terminal)."""
+    try:
+        return sys.stdin is None or not sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        return True
+
+
+def _strip_descriptor(name):
+    """A header without the word "descriptor" (any case), trimmed, as volcanic names descriptor columns."""
+    s = str(name).strip()
+    k = s.upper().find("DESCRIPTOR")
+    return (s[:k] + s[k + 10:]).strip() if k >= 0 else s
+
+
+def _tag_index(name, tags):
+    names = [str(t).strip() for t in np.ravel(np.asarray(tags, dtype=object))]
+    key = str(name).strip()
+    if key in names:
+        return names.index(key)
+    bare = [_strip_descriptor(t) for t in names]
+    if _strip_descriptor(key) in bare:
+        return bare.index(_strip_descriptor(key))
+    raise DescriptorChoiceError(f"{name!r} is not a column; columns are: {', '.join(names)}")
+
+
+def _as_index(choice, tags):
+    if isinstance(choice, (bool, np.bool_)):
+        raise DescriptorChoiceError(f"invalid descriptor choice {choice!r}")
+    if isinstance(choice, (int, np.integer)):
+        if not 0 <= int(choice) < len(tags):
+            raise DescriptorChoiceError(f"descriptor index {choice} is out of range 0..{len(tags) - 1}")
+        return int(choice)
+    if isinstance(choice, str):
+        return _tag_index(choice, tags)
+    raise DescriptorChoiceError(f"invalid descriptor choice {choice!r}")
+
+
+def _rnum(v):
+    """JSON-safe score rounded to 4 decimals, as find_1_dv / find_2_dv rank them (None for NaN)."""
+    f = float(np.ravel(np.asarray(v, dtype=float))[0])
+    return None if math.isnan(f) else round(f, 4)
+
+
+def _sort_candidates(cands):
+    return sorted(cands, key=lambda c: (c["r2"] is None, -(c["r2"] or 0.0),
+                                         math.inf if c["mae"] is None else c["mae"], c["idx"]))
+
+
+def _scored_1(d, tags, coeff, regress, verb):
+    from navicat_volcanic.dv1 import score_1_dv
+
+    maes, r2s, _ = score_1_dv(d, tags, coeff, regress, verb)
+    names = [str(t).strip() for t in np.ravel(np.asarray(tags, dtype=object))]
+    ts = np.asarray(coeff).astype(bool)
+    out = [{"cols": [names[k + 1]], "idx": [k + 1], "r2": _rnum(r2s[k]), "mae": _rnum(maes[k]), "ts": bool(ts[k + 1])}
+           for k in range(len(r2s))]
+    return _sort_candidates(out)
+
+
+def _scored_2(d, tags, coeff, regress, verb):
+    from navicat_volcanic.dv2 import score_2_dv
+
+    pairs, pcoeff, maes, r2s, _ = score_2_dv(d, tags, coeff, regress, verb)
+    names = [str(t).strip() for t in np.ravel(np.asarray(tags, dtype=object))]
+    out = [{"cols": [names[i + 1], names[j + 1]], "idx": [i + 1, j + 1], "r2": _rnum(r2s[k]), "mae": _rnum(maes[k]),
+            "ts": bool(pcoeff[k])} for k, (i, j) in enumerate(pairs)]
+    return _sort_candidates(out)
+
+
+def _public(scored):
+    return [{k: v for k, v in c.items() if k != "ts"} for c in scored if not c["ts"]]
+
+
+def candidates_1_dv(d, tags, coeff, regress, verb=0):
+    """Every non-TS column but the first scored as a single descriptor (dv1.score_1_dv), best mean r2 first:
+    [{"cols": [name], "idx": [index into tags], "r2", "mae"}] (r2 and mae rounded to 4 decimals, None if undefined)."""
+    return _public(_scored_1(d, tags, coeff, regress, verb))
+
+
+def candidates_2_dv(d, tags, coeff, regress, verb=0):
+    """Every pair of non-TS columns but the first scored as two descriptors (dv2.score_2_dv), best mean r2 first:
+    [{"cols": [name1, name2], "idx": [i1, i2], "r2", "mae"}]. Like find_2_dv, it sets regress[-1] to False in place
+    when the last column is constant."""
+    return _public(_scored_2(d, tags, coeff, regress, verb))
+
+
+def _listing(cands, n=10):
+    shown = ", ".join(f"{' + '.join(c['cols'])} (r2 {c['r2']}, MAE {c['mae']})" for c in cands[:n])
+    return shown + (f" and {len(cands) - n} more" if len(cands) > n else "")
+
+
+def _choose(scored, tags, coeff, choice, seed, nd):
+    cands = _public(scored)
+    names = [str(t).strip() for t in np.ravel(np.asarray(tags, dtype=object))]
+    res = {"idx": None, "chosen": [], "candidates": cands, "how": "", "tie": [], "seed": seed, "warnings": []}
+    what = "descriptor" if nd == 1 else "descriptor pair"
+    if choice is None:
+        raise DescriptorChoiceError(
+            f"a {what} must be chosen and none was given; pass 'auto' or "
+            + ("a column" if nd == 1 else "two columns") + f". Candidates, best mean r2 first: {_listing(cands)}", cands)
+    if isinstance(choice, str) and choice.strip().lower() == "auto":
+        finite = [c for c in cands if c["r2"] is not None]
+        if not finite:
+            raise DescriptorChoiceError(f"no {what} candidate has a defined r2, so 'auto' cannot choose", cands)
+        best = finite[0]["r2"]
+        tied = sorted((c for c in finite if c["r2"] == best), key=lambda c: c["idx"])
+        if len(tied) > 1:
+            s = 0 if seed is None else int(seed)
+            pick = tied[int(np.random.default_rng(s).integers(len(tied)))]
+            res["tie"] = [" + ".join(c["cols"]) for c in tied]
+            res["how"] = (f"auto: best mean r2 {best:.4f}, a tie between {', '.join(res['tie'])} (equal r2 to 4 "
+                          f"decimals), broken with seed {s}")
+            res["warnings"].append(f"descriptor tie: {', '.join(res['tie'])} have the same mean r2 {best:.4f}; "
+                                   f"{' + '.join(pick['cols'])} was taken with seed {s}")
+        else:
+            pick = finite[0]
+            res["how"] = f"auto: best mean r2 ({best:.4f}) among {len(cands)} candidates"
+        # find_1_dv / find_2_dv also see a tie when a transition-state column scores the same; it is never a
+        # candidate, but the tie is reported (the descriptor is then collinear with that TS)
+        ts_tied = [" + ".join(c["cols"]) for c in scored if c["ts"] and c["r2"] == best]
+        if ts_tied:
+            res["tie"] = res["tie"] or [" + ".join(pick["cols"])]
+            res["tie"] += ts_tied
+            res["how"] += (f"; tie with transition-state column(s) {', '.join(ts_tied)} at the same r2, which are "
+                           "not candidates")
+            res["warnings"].append(f"descriptor tie: {' + '.join(pick['cols'])} and the transition-state column(s) "
+                                   f"{', '.join(ts_tied)} have the same mean r2 {best:.4f}; transition states are "
+                                   f"not candidates, so {' + '.join(pick['cols'])} was taken")
+        idx = list(pick["idx"])
+    else:
+        given = list(choice) if isinstance(choice, (list, tuple)) else [choice]
+        if len(given) != nd:
+            raise DescriptorChoiceError(f"{nd} descriptor column(s) needed, got {len(given)}: {given!r}", cands)
+        idx = [_as_index(g, tags) for g in given]
+        if 0 in idx:
+            raise DescriptorChoiceError(f"{names[0]!r} is the reference state (the first energy column) and cannot "
+                                        "be a descriptor", cands)
+        if len(set(idx)) != len(idx):
+            raise DescriptorChoiceError(f"the two descriptors must be different columns, got {given!r}", cands)
+        ts = np.asarray(coeff).astype(bool)
+        for i in idx:
+            if ts[i]:
+                res["warnings"].append(f"descriptor {names[i]!r} is a transition-state column")
+        res["how"] = "given: " + " + ".join(names[i] for i in idx)
+    res["idx"] = idx[0] if nd == 1 else tuple(idx)
+    res["chosen"] = [names[i] for i in idx]
+    return res
+
+
+def choose_1_dv(d, tags, coeff, regress, choice="auto", seed=None, verb=0):
+    """Choose one descriptor column without asking anyone (the non-interactive counterpart of find_1_dv +
+    user_choose_1_dv).
+
+    d, tags, coeff, regress are what find_1_dv takes (tags[0] is the reference state). choice: "auto" takes the
+    candidate with the best mean r2 (as find_1_dv ranks them, rounded to 4 decimals); a tie is broken with
+    numpy.random.default_rng(seed) (seed None means 0) and reported. A column name (trimmed; "Descriptor X" and "X"
+    name the same column) or an int index into tags takes that column. None raises DescriptorChoiceError listing
+    the candidates. Returns {"idx": int index into tags, "chosen": [name], "candidates": candidates_1_dv(...),
+    "how": str, "tie": [tied names] or [], "seed": seed, "warnings": [str]}.
+    """
+    return _choose(_scored_1(d, tags, coeff, regress, verb), tags, coeff, choice, seed, 1)
+
+
+def choose_2_dv(d, tags, coeff, regress, choice="auto", seed=None, verb=0):
+    """Choose a pair of descriptor columns without asking anyone (the counterpart of find_2_dv +
+    user_choose_2_dv). As choose_1_dv; an explicit choice is a pair of names or indices into tags. "idx" is a pair
+    of indices into tags (the convention of user_choose_2_dv's return value). Like find_2_dv, it sets regress[-1]
+    to False in place when the last column is constant."""
+    return _choose(_scored_2(d, tags, coeff, regress, verb), tags, coeff, choice, seed, 2)
+
+
+def user_choose_1_dv(dvs, r2s, tags, choice=None):
+    """Choose one descriptor column; returns its index into ``tags`` (or None when the user declines).
+
+    choice: None asks on the terminal when stdin is one, and raises DescriptorChoiceError (listing the candidates)
+    when it is not, so a headless run never waits on input(); "auto" takes the candidate with the best r2 (the first
+    of ``dvs`` on a tie); an int is an index into ``tags``; a str is a column name of ``tags``.
+    """
+    if choice is not None or _headless():
+        otags = np.asarray(tags, dtype=object)
+        cands = [(str(np.ravel(otags[dv])[0]), float(np.ravel(r2)[0])) for dv, r2 in zip(dvs, r2s)]
+        if choice is None:
+            raise DescriptorChoiceError(
+                "a descriptor must be chosen and stdin is not a terminal; pass a choice ('auto', a column name or an "
+                "index). Candidates (column, r2): " + ", ".join(f"{c} ({r:.4f})" for c, r in cands), cands)
+        if isinstance(choice, str) and choice.strip().lower() == "auto":
+            if not len(dvs):
+                raise DescriptorChoiceError("no descriptor candidates to choose from")
+            return dvs[int(np.argmax([float(np.ravel(r)[0]) for r in r2s]))]
+        return _as_index(choice, tags)
     for dv, r2 in zip(dvs, r2s):
         print(
             f"\n{tags[dv]} has been identified as a suitable descriptor variable with r2={np.round(r2,4)}."
@@ -68,7 +317,29 @@ def user_choose_1_dv(dvs, r2s, tags):
     return None
 
 
-def user_choose_2_dv(ddvs, r2s, tags):
+def user_choose_2_dv(ddvs, r2s, tags, choice=None):
+    """Choose a pair of descriptor columns; returns their indices into ``tags`` (or (None, None) when declined).
+
+    choice: None asks on the terminal when stdin is one, and raises DescriptorChoiceError (listing the candidates)
+    when it is not; "auto" takes the pair with the best r2 (the first of ``ddvs`` on a tie); a pair of ints is a pair
+    of indices into ``tags``; a pair of str is a pair of column names of ``tags``.
+    """
+    if choice is not None or _headless():
+        inner = [str(t) for t in np.ravel(np.asarray(tags, dtype=object))[1:]]
+        cands = [((inner[dv[0]], inner[dv[1]]), float(np.ravel(r2)[0])) for dv, r2 in zip(ddvs, r2s)]
+        if choice is None:
+            raise DescriptorChoiceError(
+                "a descriptor pair must be chosen and stdin is not a terminal; pass a choice ('auto', two column "
+                "names or two indices). Candidates (columns, r2): "
+                + ", ".join(f"{a} + {b} ({r:.4f})" for (a, b), r in cands), cands)
+        if isinstance(choice, str) and choice.strip().lower() == "auto":
+            if not len(ddvs):
+                raise DescriptorChoiceError("no descriptor candidates to choose from")
+            dv = ddvs[int(np.argmax([float(np.ravel(r)[0]) for r in r2s]))]
+            return (dv[0] + 1, dv[1] + 1)
+        if isinstance(choice, str) or len(choice) != 2:
+            raise DescriptorChoiceError(f"a descriptor pair choice must be 'auto' or two columns, not {choice!r}")
+        return _as_index(choice[0], tags), _as_index(choice[1], tags)
     tags = np.array(tags[1:], dtype=np.str_)
     ptags = []
     for pair in itertools.combinations(tags, r=2):
@@ -94,7 +365,7 @@ def user_choose_2_dv(ddvs, r2s, tags):
     return None, None
 
 
-def processargs(arguments):
+def build_parser():
     vbuilder = argparse.ArgumentParser(
         prog="volcanic",
         description="Build volcano plots from reaction energy profile data.",
@@ -141,7 +412,7 @@ def processargs(arguments):
         dest="verb",
         type=int,
         default=0,
-        help="Verbosity level of the code. Higher is more verbose and viceversa. Set to at least 2 to generate csv output files (default: 1)",
+        help="Verbosity level of the code. Higher is more verbose and viceversa. Csv output files are written at every level. (default: 0)",
     )
     vbuilder.add_argument(
         "-r",
@@ -245,7 +516,7 @@ def processargs(arguments):
         dest="rmargin",
         type=int,
         default=10,
-        help="Right margin to pad for visualization, in descriptor variable units. (default: 20)",
+        help="Right margin to pad for visualization, in descriptor variable units. (default: 10)",
     )
     vbuilder.add_argument(
         "-lm",
@@ -253,7 +524,7 @@ def processargs(arguments):
         dest="lmargin",
         type=int,
         default=10,
-        help="Left margin to pad for visualization, in descriptor variable units. (default: 20)",
+        help="Left margin to pad for visualization, in descriptor variable units. (default: 10)",
     )
     vbuilder.add_argument(
         "-np",
@@ -287,7 +558,72 @@ def processargs(arguments):
         action="store_true",
         help="Refill missing values using LSRs. Beta version. (default: False)",
     )
-    args = vbuilder.parse_args(arguments)
+    vbuilder.add_argument(
+        "--descriptor",
+        dest="descriptor",
+        action="append",
+        default=None,
+        metavar="auto|COLUMN",
+        help="Descriptor to use without asking: 'auto' (best mean r2; a tie is broken with --seed and reported) or a "
+        "column header (trimmed; a 'Descriptor X' column can be named X). With -nd 2, 'auto' or the option twice. "
+        "Without it volcanic asks at the terminal, and when stdin is not a terminal it stops (exit 2) listing the "
+        "candidates.",
+    )
+    vbuilder.add_argument(
+        "--outdir",
+        dest="outdir",
+        default=None,
+        help="Directory for every file the run writes (created when missing), including volcanic_result.json. "
+        "(default: the working directory)",
+    )
+    vbuilder.add_argument(
+        "--seed",
+        dest="seed",
+        type=int,
+        default=None,
+        help="Seed for the tie-break of --descriptor auto (default 0), the iterative imputer and volcanic's other "
+        "random tie-breaks (unseeded by default).",
+    )
+    vbuilder.add_argument(
+        "--roles",
+        dest="roles",
+        default=None,
+        help="Roles file (reaction_profile/v1) declaring each column as INT, TS, END or DESCRIPTOR. (default: "
+        "<table name without its extension>.roles.json or roles.json next to the table if present, else the header name rule)",
+    )
+    return vbuilder
+
+
+def parse_args(arguments):
+    """The parsed command line (argparse Namespace); argparse exits with status 2 on an unknown option."""
+    return build_parser().parse_args(arguments)
+
+
+def merge_descriptor_frames(df, ddfs):
+    """Append the columns of descriptor tables (one column per descriptor, rows in the profile's order, no id
+    column) to the profile table, after its energy columns, as "Descriptor <header>" columns (a header that already
+    holds the word "descriptor" is kept)."""
+    if not ddfs:
+        return df
+    ddf = pd.concat(ddfs, axis=1) if len(ddfs) > 1 else ddfs[0]
+    if df.shape[0] != ddf.shape[0]:
+        raise InputError(
+            f"Different number of entries in reaction profile input file ({df.shape[0]}) and descriptor file "
+            f"({ddf.shape[0]}). Exiting."
+        )
+    df = df.copy()
+    for column in ddf.columns:
+        name = str(column).strip()
+        if "descriptor" not in name.lower():
+            name = f"Descriptor {name}"
+        if name in [str(c).strip() for c in df.columns]:
+            raise InputError(f"Descriptor column {name!r} is already in the reaction profile table. Exiting.")
+        df[name] = ddf[column].values
+    return df
+
+
+def processargs(arguments):
+    args = parse_args(arguments)
 
     dfs, ddfs = check_input(
         args.filenames,
@@ -309,22 +645,11 @@ def processargs(arguments):
         print(df.head(10))
 
     if ddfs:
-        if len(ddfs) > 1:
-            ddf = pd.concat(ddfs)
-        elif len(dfs) == 0:
-            raise InputError("No valid descriptor files were provided. Exiting.")
-        else:
-            ddf = ddfs[0]
-        assert isinstance(ddf, pd.DataFrame)
-        if not (df.shape[0] == ddf.shape[0]):
-            raise InputError(
-                "Different number of entries in reaction profile input file and descriptor file. Exiting."
-            )
         if args.verb > 1:
-            print("Final descriptor database (top rows):")
-            print(ddf.head())
-        for column in ddf:
-            df.insert(1, f"Descriptor {column}", ddf[column].values)
+            for ddf in ddfs:
+                print("Final descriptor database (top rows):")
+                print(ddf.head())
+        df = merge_descriptor_frames(df, ddfs)
     return (
         df,
         args.nd,
@@ -360,9 +685,9 @@ def check_input(filenames, dfilenames, temp, nd, imputer_strat, verb):
             )
     for dfilename in dfilenames:
         if dfilename.split(".")[-1] in accepted_excel_terms:
-            dfs.append(pd.read_excel(dfilename))
+            ddfs.append(pd.read_excel(dfilename))
         elif dfilename.split(".")[-1] == "csv":
-            dfs.append(pd.read_csv(dfilename))
+            ddfs.append(pd.read_csv(dfilename))
         else:
             raise InputError(
                 f"File termination for filename {dfilename} was not understood. Try csv or one of {accepted_excel_terms}."
@@ -443,6 +768,11 @@ def setflags(runmode):
         es_volcano = True
         tof_volcano = True
     else:
+        if _headless():
+            raise ChoiceError(
+                "no run mode was given and stdin is not a terminal, so volcanic cannot ask which volcano plots to "
+                f"build; pass one of {RUN_MODE_FLAGS}"
+            )
         t_volcano = yesno("Generate thermodynamic volcano plot")
         k_volcano = yesno("Generate kinetic volcano plot")
         es_volcano = yesno("Generate energy span volcano plot")
